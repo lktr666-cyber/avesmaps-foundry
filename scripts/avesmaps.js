@@ -10,8 +10,7 @@ function mayOpen() {
 function normalizeBaseUrl() {
   const configured = String(game.settings.get(MODULE_ID, "defaultUrl") || DEFAULT_URL).trim();
   try {
-    const url = new URL(configured);
-    return url.toString();
+    return new URL(configured).toString();
   } catch (_err) {
     return DEFAULT_URL;
   }
@@ -30,82 +29,130 @@ function buildDeepLink(type, name) {
   return url.toString();
 }
 
-const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+function currentFrame(app) {
+  if (!app) return null;
+  const el = app.element;
+  if (!el) return null;
+  if (el instanceof HTMLElement) return el.querySelector("iframe.avesmaps-frame");
+  if (el?.find) return el.find("iframe.avesmaps-frame")[0] ?? null;
+  return null;
+}
 
-class AvesmapsApplication extends HandlebarsApplicationMixin(ApplicationV2) {
-  static DEFAULT_OPTIONS = {
-    id: "avesmaps-foundry-window",
-    classes: ["avesmaps-foundry-window"],
-    position: {
-      width: 1200,
-      height: 820
-    },
-    window: {
-      title: "Avesmaps – Aventurien",
-      icon: "fa-solid fa-map-location-dot",
-      resizable: true
-    },
-    actions: {
-      home: this.#goHome,
-      reload: this.#reload,
-      external: this.#openExternal
-    }
-  };
+function goHome(app) {
+  app.avesmapsUrl = normalizeBaseUrl();
+  const frame = currentFrame(app);
+  if (frame) frame.src = app.avesmapsUrl;
+}
 
-  static PARTS = {
-    main: {
-      template: `modules/${MODULE_ID}/templates/avesmaps.hbs`
-    }
-  };
+function reloadFrame(app) {
+  const frame = currentFrame(app);
+  if (!frame) return;
+  const current = frame.src || app.avesmapsUrl;
+  frame.src = "about:blank";
+  requestAnimationFrame(() => {
+    frame.src = current;
+  });
+}
 
-  constructor({ url = null, ...options } = {}) {
-    super(options);
-    this.avesmapsUrl = url || normalizeBaseUrl();
-  }
+function openExternal(app) {
+  const frame = currentFrame(app);
+  const url = frame?.src || app?.avesmapsUrl || normalizeBaseUrl();
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
-  async _prepareContext(options) {
-    const context = await super._prepareContext(options);
-    return {
-      ...context,
-      avesmapsUrl: this.avesmapsUrl
+const hasApplicationV2 = Boolean(foundry?.applications?.api?.ApplicationV2);
+let AvesmapsApplication;
+
+if (hasApplicationV2) {
+  const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
+
+  AvesmapsApplication = class extends HandlebarsApplicationMixin(ApplicationV2) {
+    static DEFAULT_OPTIONS = {
+      id: "avesmaps-foundry-window",
+      classes: ["avesmaps-foundry-window"],
+      position: { width: 1200, height: 820 },
+      window: {
+        title: "Avesmaps – Aventurien",
+        icon: "fa-solid fa-map-location-dot",
+        resizable: true
+      },
+      actions: {
+        home: function () { goHome(this); },
+        reload: function () { reloadFrame(this); },
+        external: function () { openExternal(this); }
+      }
     };
-  }
 
-  async setUrl(url) {
-    this.avesmapsUrl = String(url || normalizeBaseUrl());
-    await this.render({ force: true });
-  }
+    static PARTS = {
+      main: { template: `modules/${MODULE_ID}/templates/avesmaps.hbs` }
+    };
 
-  get iframe() {
-    return this.element?.querySelector?.("iframe.avesmaps-frame") ?? null;
-  }
+    constructor({ url = null, ...options } = {}) {
+      super(options);
+      this.avesmapsUrl = url || normalizeBaseUrl();
+    }
 
-  static #goHome(_event, _target) {
-    this.avesmapsUrl = normalizeBaseUrl();
-    const frame = this.iframe;
-    if (frame) frame.src = this.avesmapsUrl;
-  }
+    async _prepareContext(options) {
+      const context = await super._prepareContext(options);
+      return { ...context, avesmapsUrl: this.avesmapsUrl };
+    }
 
-  static #reload(_event, _target) {
-    const frame = this.iframe;
-    if (!frame) return;
-    const current = frame.src || this.avesmapsUrl;
-    frame.src = "about:blank";
-    requestAnimationFrame(() => {
-      frame.src = current;
-    });
-  }
+    async setUrl(url) {
+      this.avesmapsUrl = String(url || normalizeBaseUrl());
+      await this.render({ force: true });
+    }
 
-  static #openExternal(_event, _target) {
-    const frame = this.iframe;
-    const url = frame?.src || this.avesmapsUrl || normalizeBaseUrl();
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
+    _onClose(options) {
+      super._onClose(options);
+      if (activeApp === this) activeApp = null;
+    }
+  };
+} else {
+  // Foundry VTT 11/12 legacy Application API.
+  AvesmapsApplication = class extends Application {
+    static get defaultOptions() {
+      return foundry.utils.mergeObject(super.defaultOptions, {
+        id: "avesmaps-foundry-window",
+        classes: ["avesmaps-foundry-window"],
+        title: "Avesmaps – Aventurien",
+        template: `modules/${MODULE_ID}/templates/avesmaps.hbs`,
+        width: 1200,
+        height: 820,
+        resizable: true
+      });
+    }
 
-  _onClose(options) {
-    super._onClose(options);
-    if (activeApp === this) activeApp = null;
-  }
+    constructor({ url = null, ...options } = {}) {
+      super(options);
+      this.avesmapsUrl = url || normalizeBaseUrl();
+    }
+
+    getData(options = {}) {
+      return { ...super.getData(options), avesmapsUrl: this.avesmapsUrl };
+    }
+
+    activateListeners(html) {
+      super.activateListeners(html);
+      html.find('[data-action="home"]').on("click", () => goHome(this));
+      html.find('[data-action="reload"]').on("click", () => reloadFrame(this));
+      html.find('[data-action="external"]').on("click", () => openExternal(this));
+    }
+
+    async setUrl(url) {
+      this.avesmapsUrl = String(url || normalizeBaseUrl());
+      this.render(true);
+    }
+
+    async close(options = {}) {
+      if (activeApp === this) activeApp = null;
+      return super.close(options);
+    }
+  };
+}
+
+async function renderApplication(app) {
+  if (hasApplicationV2) await app.render({ force: true });
+  else app.render(true);
 }
 
 async function openAvesmaps(url = null) {
@@ -118,12 +165,13 @@ async function openAvesmaps(url = null) {
 
   if (activeApp?.rendered) {
     await activeApp.setUrl(targetUrl);
-    activeApp.bringToFront?.();
+    if (hasApplicationV2) activeApp.bringToFront?.();
+    else activeApp.bringToTop?.();
     return activeApp;
   }
 
   activeApp = new AvesmapsApplication({ url: targetUrl });
-  await activeApp.render({ force: true });
+  await renderApplication(activeApp);
   return activeApp;
 }
 
@@ -153,12 +201,7 @@ Hooks.once("init", () => {
   game.keybindings.register(MODULE_ID, "openAvesmaps", {
     name: "Avesmaps öffnen",
     hint: "Öffnet den Aventurien-Routenplaner in einem Foundry-Fenster.",
-    editable: [
-      {
-        key: "KeyA",
-        modifiers: ["SHIFT"]
-      }
-    ],
+    editable: [{ key: "KeyA", modifiers: ["SHIFT"] }],
     onDown: () => {
       openAvesmaps();
       return true;
@@ -170,8 +213,25 @@ Hooks.once("init", () => {
 Hooks.on("getSceneControlButtons", controls => {
   if (!mayOpen()) return;
 
-  // Token controls exist in normal game worlds for both GMs and players.
-  const target = controls.tokens ?? Object.values(controls).find(c => c?.tools);
+  // Foundry 11/12: controls is an array and tools is an array.
+  if (Array.isArray(controls)) {
+    const target = controls.find(c => c?.name === "token" || c?.name === "tokens")
+      ?? controls.find(c => Array.isArray(c?.tools));
+    if (!target?.tools) return;
+
+    target.tools.push({
+      name: "avesmaps",
+      title: "Avesmaps öffnen",
+      icon: "fas fa-map-marked-alt",
+      button: true,
+      visible: true,
+      onClick: () => openAvesmaps()
+    });
+    return;
+  }
+
+  // Foundry 13/14: controls and tools are records.
+  const target = controls.tokens ?? controls.token ?? Object.values(controls).find(c => c?.tools);
   if (!target?.tools) return;
 
   target.tools.avesmaps = {
@@ -201,5 +261,5 @@ Hooks.once("ready", () => {
     };
   }
 
-  console.info(`${MODULE_ID} | ready`);
+  console.info(`${MODULE_ID} | ready on Foundry ${game.version}`);
 });
