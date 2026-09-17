@@ -1,0 +1,118 @@
+name: Build Foundry release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix, e.g. 0.1.0"
+        required: true
+        default: "0.1.0"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Derive release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            VERSION="$MANUAL_VERSION"
+            TAG="v${VERSION}"
+          else
+            TAG="$GITHUB_REF_NAME"
+            VERSION="${TAG#v}"
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like 0.1.0 (or a semantic prerelease version). Got: $VERSION" >&2
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build release manifest
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          mkdir -p dist
+          cp -R scripts styles templates dist/
+          cp README.md LICENSE dist/
+          cp module.json dist/module.json
+
+          node <<'NODE'
+          const fs = require('fs');
+          const manifestPath = 'dist/module.json';
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+          const repo = process.env.REPOSITORY;
+          const tag = process.env.TAG;
+          const version = process.env.VERSION;
+
+          manifest.version = version;
+          manifest.url = `https://github.com/${repo}`;
+          manifest.manifest = `https://github.com/${repo}/releases/latest/download/module.json`;
+          manifest.download = `https://github.com/${repo}/releases/download/${tag}/module.zip`;
+          manifest.bugs = `https://github.com/${repo}/issues`;
+          manifest.readme = `https://github.com/${repo}/blob/${tag}/README.md`;
+
+          fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+          NODE
+
+      - name: Create module.zip
+        shell: bash
+        run: |
+          cd dist
+          zip -r ../module.zip . -x '*.DS_Store'
+
+      - name: Validate release assets
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, zipfile
+          with open('dist/module.json', encoding='utf-8') as f:
+              manifest = json.load(f)
+          assert manifest['id'] == 'avesmaps-foundry'
+          assert manifest['manifest'].endswith('/releases/latest/download/module.json')
+          assert manifest['download'].endswith('/module.zip')
+          with zipfile.ZipFile('module.zip') as z:
+              names = set(z.namelist())
+              required = {'module.json', 'scripts/avesmaps.js', 'styles/avesmaps.css', 'templates/avesmaps.hbs'}
+              missing = required - names
+              assert not missing, f'Missing in module.zip: {sorted(missing)}'
+          print('Release validation OK')
+          PY
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" module.zip dist/module.json --clobber
+          else
+            gh release create "$TAG" \
+              module.zip dist/module.json \
+              --target "$GITHUB_SHA" \
+              --title "Avesmaps for Foundry v${VERSION}" \
+              --generate-notes
+          fi
