@@ -1,0 +1,21 @@
+{
+  "id": "avesmaps-foundry",
+  "title": "Avesmaps for Foundry",
+  "description": "Öffnet Avesmaps als Aventurien-Karten- und Routenwerkzeug direkt in Foundry VTT und stellt Deep-Link-Helfer für Siedlungen, Regionen, Staaten, Straßen und Flüsse bereit.",
+  "version": "0.1.0",
+  "authors": [
+    {
+      "name": "Private Foundry helper module"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "14"
+  },
+  "esmodules": [
+    "scripts/avesmaps.js"
+  ],
+  "styles": [
+    "styles/avesmaps.css"
+  ]
+}

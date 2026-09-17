@@ -1,0 +1,24 @@
+<div class="avesmaps-shell">
+  <nav class="avesmaps-toolbar" aria-label="Avesmaps Werkzeugleiste">
+    <button type="button" data-action="home" title="Avesmaps-Startseite">
+      <i class="fa-solid fa-house"></i> Start
+    </button>
+    <button type="button" data-action="reload" title="Avesmaps neu laden">
+      <i class="fa-solid fa-rotate-right"></i> Neu laden
+    </button>
+    <span class="avesmaps-spacer"></span>
+    <span class="avesmaps-hint">Falls die Karte im Fenster blockiert wird, extern öffnen.</span>
+    <button type="button" data-action="external" title="Avesmaps im Browser öffnen">
+      <i class="fa-solid fa-arrow-up-right-from-square"></i> Extern
+    </button>
+  </nav>
+
+  <iframe
+    class="avesmaps-frame"
+    src="{{avesmapsUrl}}"
+    title="Avesmaps – Aventurienkarte"
+    loading="eager"
+    referrerpolicy="strict-origin-when-cross-origin"
+    allow="fullscreen"
+  ></iframe>
+</div>
